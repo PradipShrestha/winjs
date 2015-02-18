@@ -87,8 +87,8 @@ export class _CommandingSurface {
     private _separatorWidth: number;
     private _standardCommandWidth: number;
     private _overflowButtonWidth: number;
-    private _customContentFlyout: _Flyout.Flyout;
-    private _customContentContainer: HTMLElement;
+    private _contentFlyout: _Flyout.Flyout;
+    private _contentFlyoutInterior: HTMLElement;
     private _data: BindingList.List<_Command.ICommand>;
     private _primaryCommands: _Command.ICommand[];
     private _secondaryCommands: _Command.ICommand[];
@@ -325,9 +325,9 @@ export class _CommandingSurface {
 
         _ElementUtilities._resizeNotifier.unsubscribe(this._dom.root, this._resizeHandlerBound);
 
-        if (this._customContentFlyout) {
-            this._customContentFlyout.dispose();
-            this._customContentFlyout.element.parentNode.removeChild(this._customContentFlyout.element);
+        if (this._contentFlyout) {
+            this._contentFlyout.dispose();
+            this._contentFlyout.element.parentNode.removeChild(this._contentFlyout.element);
         }
 
         _Dispose.disposeSubTree(this._dom.root);
@@ -406,7 +406,6 @@ export class _CommandingSurface {
         _ElementUtilities.addClass(overflowArea, _Constants.overflowAreaCssClass);
         _ElementUtilities.addClass(overflowArea, _Constants.menuCssClass);
         this._dom.root.appendChild(overflowArea);
-
 
         this._dom = {
             root: root,
@@ -837,40 +836,37 @@ export class _CommandingSurface {
     private _positionCommands() {
         this._writeProfilerMark("_positionCommands,StartTM");
 
-        if (this._disposed || !this._measured) {
-            this._writeProfilerMark("_positionCommands,StopTM");
-            return;
+        if (this._measured && !this._disposed) {
+
+            if (this._dom.overflowButton) {
+                // Ensure that the overflow button is the last element in the main action area
+                this._dom.actionArea.appendChild(this._dom.overflowButton);
+            }
+
+            this._primaryCommands.forEach((command) => {
+                command.element.style.display = (command.hidden ? "none" : "");
+            })
+
+            var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.root);
+
+            var commandsLocation = this._getPrimaryCommandsLocation(mainActionWidth);
+
+            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
+
+            // Primary commands that will be mirrored in the overflow area should be hidden so
+            // that they are not visible in the main action area.
+            commandsLocation.overflowArea.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            // The secondary commands in the main action area should be hidden since they are always
+            // mirrored as new elements in the overflow area.
+            this._secondaryCommands.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            this._setupOverflowArea(commandsLocation.overflowArea);
         }
-
-        if (this._dom.overflowButton) {
-            // Ensure that the overflow button is the last element in the main action area
-            this._dom.actionArea.appendChild(this._dom.overflowButton);
-        }
-
-        this._primaryCommands.forEach((command) => {
-            command.element.style.display = (command.hidden ? "none" : "");
-        })
-
-        var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.root);
-
-        var commandsLocation = this._getPrimaryCommandsLocation(mainActionWidth);
-
-        this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
-
-        // Primary commands that will be mirrored in the overflow area should be hidden so
-        // that they are not visible in the main action area.
-        commandsLocation.overflowArea.forEach((command) => {
-            command.element.style.display = "none";
-        });
-
-        // The secondary commands in the the main action area should be hidden since they are always
-        // mirrored as new elements in the overflow area.
-        this._secondaryCommands.forEach((command) => {
-            command.element.style.display = "none";
-        });
-
-        this._setupOverflowArea(commandsLocation.overflowArea);
-
         this._writeProfilerMark("_positionCommands,StopTM");
     }
 
@@ -903,7 +899,7 @@ export class _CommandingSurface {
             if (!menuCommand.label) {
                 menuCommand.label = _Constants.contentMenuCommandDefaultLabel;
             }
-            menuCommand.flyout = this._customContentFlyout;
+            menuCommand.flyout = this._contentFlyout;
         } else {
             menuCommand.onclick = command.onclick;
         }
@@ -918,20 +914,18 @@ export class _CommandingSurface {
         var isCustomContent = (command: _Command.ICommand) => { return command.type === _Constants.typeContent };
         var hasCustomContent = additionalCommands.some(isCustomContent) || this._secondaryCommands.some(isCustomContent);
 
-        if (hasCustomContent && !this._customContentFlyout) {
-            var mainFlyout = _Global.document.createElement("div");
-            this._customContentContainer = _Global.document.createElement("div");
-            _ElementUtilities.addClass(this._customContentContainer, _Constants.overflowContentFlyoutCssClass);
-            mainFlyout.appendChild(this._customContentContainer);
-            this._customContentFlyout = new _Flyout.Flyout(mainFlyout);
-            _Global.document.body.appendChild(this._customContentFlyout.element);
-            this._customContentFlyout.onbeforeshow = () => {
-                _ElementUtilities.empty(this._customContentContainer);
-                _ElementUtilities._reparentChildren(this._chosenCommand.element, this._customContentContainer);
-
+        if (hasCustomContent && !this._contentFlyout) {
+            this._contentFlyoutInterior = _Global.document.createElement("div");
+            _ElementUtilities.addClass(this._contentFlyout.element, _Constants.contentFlyoutCssClass);
+            this._contentFlyout = new _Flyout.Flyout();
+            this._contentFlyout.element.appendChild(this._contentFlyoutInterior);
+            _Global.document.body.appendChild(this._contentFlyout.element);
+            this._contentFlyout.onbeforeshow = () => {
+                _ElementUtilities.empty(this._contentFlyoutInterior);
+                _ElementUtilities._reparentChildren(this._chosenCommand.element, this._contentFlyoutInterior);
             };
-            this._customContentFlyout.onafterhide = () => {
-                _ElementUtilities._reparentChildren(this._customContentContainer, this._chosenCommand.element);
+            this._contentFlyout.onafterhide = () => {
+                _ElementUtilities._reparentChildren(this._contentFlyoutInterior, this._chosenCommand.element);
             };
         }
 
