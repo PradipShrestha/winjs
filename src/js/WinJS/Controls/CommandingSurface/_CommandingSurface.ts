@@ -98,9 +98,7 @@ export class _CommandingSurface {
 
     // State
     private _processNewData = false;
-    private _cacheNewMeasurements = false;
-    private _measured = false;
-    private _initializing = true;
+    private _needLayout = false;
     private _refreshPending = false;
     private _rtl = false;
     private _disposed = false;
@@ -122,8 +120,6 @@ export class _CommandingSurface {
         overflowButton: HTMLButtonElement;
         overflowArea: HTMLElement;
     };
-
-
 
     /// <field type="HTMLElement" domElement="true" hidden="true" locid="WinJS.UI._CommandingSurface.element" helpKeyword="WinJS.UI._CommandingSurface.element">
     /// Gets the DOM element that hosts the CommandingSurface.
@@ -205,7 +201,6 @@ export class _CommandingSurface {
             onUpdateDomWithIsShown: (isShown: boolean) => {
                 //this._isShownMode = isShown;
                 //this._updateDomImpl();
-
                 return;
             }
         });
@@ -315,8 +310,6 @@ export class _CommandingSurface {
         this._dom.root.addEventListener('keydown', this._keyDownHandler.bind(this));
         this._winKeyboard = new _KeyboardBehavior._WinKeyboard(this._dom.root);
 
-        this._initializing = false;
-
         this._writeProfilerMark("constructor,StopTM");
 
         return this;
@@ -349,7 +342,8 @@ export class _CommandingSurface {
         /// Forces the CommandingSurface to update its layout. Use this function when the window did not change size, but the container of the CommandingSurface changed size.
         /// </summary>
         /// </signature>
-        this._cacheNewMeasurements = true;
+        this._cachedMeasurements = null;
+        this._needLayout = true;
         this._updateDomImpl();
     }
 
@@ -462,9 +456,11 @@ export class _CommandingSurface {
     private _updateDomImpl(): void {
         this._writeProfilerMark("_updateDomImpl,info");
 
-
         // Update actionarea DOM
         if (this._processNewData) { /////////////////////////////this._writeProfilerMark("_dataUpdated,info");
+            this._needLayout = true;
+            this._cachedMeasurements = null;
+
             var changeInfo = this._getDataChangeInfo();
 
             // Take a snapshot of the current state
@@ -482,9 +478,6 @@ export class _CommandingSurface {
                 this._dom.actionArea.appendChild(element);
             });
 
-            // Ensure that the overflow button is the last element in the main action area
-            this._dom.actionArea.appendChild(this._dom.overflowButton);
-
             if (this.data.length > 0) {
                 _ElementUtilities.removeClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
             } else {
@@ -497,9 +490,47 @@ export class _CommandingSurface {
             this._processNewData = false;
         }
 
-        // Cache Measurements
-        if (this._cacheNewMeasurements && _Global.document.body.contains(this._dom.root) && this._dom.actionArea.offsetWidth > 0) { /////////////////////////////this._writeProfilerMark("_measureCommands,info");
+        // Ensure that the overflow button is always the last element in the main action area
+        this._dom.actionArea.appendChild(this._dom.overflowButton);
 
+        var canLayout: boolean = (!!this._cachedMeasurements || this._measure());
+
+        // layout actionarea commands
+        // this._writeProfilerMark("_positionCommands,StartTM");
+        if (this._needLayout && canLayout) {
+
+            this._primaryCommands.forEach((command) => {
+                command.element.style.display = (command.hidden ? "none" : "");
+            })
+
+            var commandsLocation = this._getPrimaryCommandsLocation();
+
+            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
+
+            // Primary commands that will be mirrored in the overflow area should be hidden so
+            // that they are not visible in the main action area.
+            commandsLocation.overflowArea.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            // The secondary commands in the main action area should be hidden since they are always
+            // mirrored as new elements in the overflow area.
+            this._secondaryCommands.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            this._setupOverflowArea(commandsLocation.overflowArea);
+        }
+        this._writeProfilerMark("_positionCommands,StopTM");
+        // project overflowarea commands
+        // hideseparators if necessary
+
+        /// jesse
+    }
+
+    private _measure() {
+        var canMeasure = (_Global.document.body.contains(this._dom.root) && this._dom.actionArea.offsetWidth > 0);
+        if (canMeasure) {
             var overflowButtonWidth = _ElementUtilities.getTotalWidth(this._dom.overflowButton),
                 actionAreaContentBoxWidth = _ElementUtilities.getContentWidth(this._dom.actionArea),
                 separatorWidth = 0,
@@ -538,49 +569,9 @@ export class _CommandingSurface {
                 overflowButtonWidth: overflowButtonWidth,
                 actionAreaContentBoxWidth: actionAreaContentBoxWidth,
             };
-
-            this._cacheNewMeasurements = false;
-        }
-
-        // position actionarea commands
-        this._writeProfilerMark("_positionCommands,StartTM");
-
-        if (this._measured && !this._disposed) {
-
-            if (this._dom.overflowButton) {
-                // Ensure that the overflow button is the last element in the main action area
-                this._dom.actionArea.appendChild(this._dom.overflowButton);
-            }
-
-            this._primaryCommands.forEach((command) => {
-                command.element.style.display = (command.hidden ? "none" : "");
-            })
-
-            //var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
-
-            var commandsLocation = this._getPrimaryCommandsLocation();
-
-            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
-
-            // Primary commands that will be mirrored in the overflow area should be hidden so
-            // that they are not visible in the main action area.
-            commandsLocation.overflowArea.forEach((command) => {
-                command.element.style.display = "none";
-            });
-
-            // The secondary commands in the main action area should be hidden since they are always
-            // mirrored as new elements in the overflow area.
-            this._secondaryCommands.forEach((command) => {
-                command.element.style.display = "none";
-            });
-
-            this._setupOverflowArea(commandsLocation.overflowArea);
-        }
-        this._writeProfilerMark("_positionCommands,StopTM");
-        // project overflowarea commands
-        // hideseparators if necessary
-
-        /// jesse
+            return true;
+        } 
+        return false;
     }
 
     private _getFocusableElementsInfo(): IFocusableElementsInfo {
@@ -609,10 +600,10 @@ export class _CommandingSurface {
 
     private _dataUpdated() {
         this._processNewData = true;
-        this._cacheNewMeasurements = true;
 
         this._primaryCommands = [];
         this._secondaryCommands = [];
+
         if (this.data.length > 0) {
             this.data.forEach((command) => {
                 if (command.section === "secondary") {
@@ -852,11 +843,13 @@ export class _CommandingSurface {
     private _resizeHandler() {
         if (this._dom.root.offsetWidth > 0) {
             if (!this._cachedMeasurements) {
+                this._needLayout = true
                 this._updateDomImpl();
             } else {
                 var currentActionAreaWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
                 if (this._cachedMeasurements.actionAreaContentBoxWidth !== currentActionAreaWidth) {
                     this._cachedMeasurements.actionAreaContentBoxWidth = currentActionAreaWidth;
+                    this._needLayout = true;
                     this._updateDomImpl();
                 }
             }
