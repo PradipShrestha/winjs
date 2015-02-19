@@ -83,27 +83,36 @@ function diffElements(lhs: Array<HTMLElement>, rhs: Array<HTMLElement>): Array<H
 export class _CommandingSurface {
 
     private _id: string;
-    private _disposed: boolean;
-    private _separatorWidth: number;
-    private _standardCommandWidth: number;
-    private _overflowButtonWidth: number;
     private _contentFlyout: _Flyout.Flyout;
     private _contentFlyoutInterior: HTMLElement;
-    private _data: BindingList.List<_Command.ICommand>;
-    private _primaryCommands: _Command.ICommand[];
-    private _secondaryCommands: _Command.ICommand[];
-    private _chosenCommand: _Command.ICommand;
-    private _measured = false;
-    private _customContentCommandsWidth: { [uniqueID: string]: number };
-    private _initializing = true;
     private _hoverable = _Hoverable.isHoverable; /* force dependency on hoverable module */
     private _winKeyboard: _KeyboardBehavior._WinKeyboard;
-    private _refreshPending: boolean;
     private _refreshBound: Function;
     private _resizeHandlerBound: (ev: any) => any;
     private _dataChangedEvents = ["itemchanged", "iteminserted", "itemmoved", "itemremoved", "reload"];
     private _machine: _ShowHideMachine.ShowHideMachine;
-    private _rtl: boolean;
+    private _data: BindingList.List<_Command.ICommand>;
+    private _primaryCommands: _Command.ICommand[];
+    private _secondaryCommands: _Command.ICommand[];
+    private _chosenCommand: _Command.ICommand;
+
+    // State
+    private _processNewData = false;
+    private _cacheNewMeasurements = false;
+    private _measured = false;
+    private _initializing = true;
+    private _refreshPending = false;
+    private _rtl = false;
+    private _disposed = false;
+
+    // Measurements
+    private _cachedMeasurements: {
+        overflowButtonWidth: number;
+        separatorWidth: number;
+        standardCommandWidth: number;
+        contentCommandWidths: { [uniqueID: string]: number };
+        actionAreaContentBoxWidth: number;
+    };
 
     // Dom elements
     private _dom: {
@@ -132,19 +141,19 @@ export class _CommandingSurface {
     set data(value: BindingList.List<_Command.ICommand>) {
         this._writeProfilerMark("set_data,info");
 
-        if (value === this.data) {
-            return;
-        }
-        if (!(value instanceof BindingList.List)) {
-            throw new _ErrorFromName("WinJS.UI._CommandingSurface.BadData", strings.badData);
-        }
+        if (value !== this.data) {
+            if (!(value instanceof BindingList.List)) {
+                throw new _ErrorFromName("WinJS.UI._CommandingSurface.BadData", strings.badData);
+            }
 
-        if (this._data) {
-            this._removeDataListeners();
+            if (this._data) {
+                this._removeDataListeners();
+            }
+            this._data = value;
+            this._addDataListeners();
+
+            this._dataUpdated();
         }
-        this._data = value;
-        this._addDataListeners();
-        this._dataUpdated();
     }
 
     constructor(element?: HTMLElement, options: any = {}) {
@@ -213,8 +222,8 @@ export class _CommandingSurface {
 
         // Exit the Init state.
         _ElementUtilities._inDom(this._dom.root).then(() => {
-            this._measureCommands();
-            this._positionCommands();
+            //this._measureCommands();
+            //this._positionCommands();
             this._rtl = _Global.getComputedStyle(this._dom.root).direction === 'rtl';
             this._machine.initialized();
         });
@@ -267,9 +276,9 @@ export class _CommandingSurface {
         //    this._dom.root.setAttribute("aria-label", strings.ariaLabel);
         //}
 
-        this._customContentCommandsWidth = {};
-        this._separatorWidth = 0;
-        this._standardCommandWidth = 0;
+        this._cachedMeasurements.contentCommandWidths = {};
+        this._cachedMeasurements.separatorWidth = 0;
+        this._cachedMeasurements.standardCommandWidth = 0;
 
         this._refreshBound = this._refresh.bind(this);
 
@@ -291,14 +300,14 @@ export class _CommandingSurface {
         var initiallyParented = _Global.document.body.contains(this._dom.root);
         _ElementUtilities._addInsertedNotifier(this._dom.root);
         if (initiallyParented) {
-            this._measureCommands();
-            this._positionCommands();
+            //this._measureCommands();
+            //this._positionCommands();
         } else {
             var nodeInsertedHandler = () => {
                 this._writeProfilerMark("_setupTree_WinJSNodeInserted:initiallyParented:" + initiallyParented + ",info");
                 this._dom.root.removeEventListener("WinJSNodeInserted", nodeInsertedHandler, false);
-                this._measureCommands();
-                this._positionCommands();
+                //this._measureCommands();
+                //this._positionCommands();
             };
             this._dom.root.addEventListener("WinJSNodeInserted", nodeInsertedHandler, false);
         }
@@ -340,8 +349,8 @@ export class _CommandingSurface {
         /// Forces the CommandingSurface to update its layout. Use this function when the window did not change size, but the container of the CommandingSurface changed size.
         /// </summary>
         /// </signature>
-        this._measureCommands();
-        this._positionCommands();
+        this._cacheNewMeasurements = true;
+        this._updateDomImpl();
     }
 
     private _writeProfilerMark(text: string) {
@@ -399,7 +408,7 @@ export class _CommandingSurface {
         overflowButton.addEventListener("click", () => {
             overflowArea.style.display = (overflowArea.style.display === "none") ? "block" : "none";
         });
-        this._overflowButtonWidth = _ElementUtilities.getTotalWidth(overflowButton);
+        this._cachedMeasurements.overflowButtonWidth = _ElementUtilities.getTotalWidth(overflowButton);
 
         var overflowArea = _Global.document.createElement("div");
         overflowArea.style.display = "none";
@@ -450,6 +459,130 @@ export class _CommandingSurface {
         //}
     }
 
+    private _updateDomImpl(): void {
+        this._writeProfilerMark("_updateDomImpl,info");
+
+
+        // Update actionarea DOM
+        if (this._processNewData) { /////////////////////////////this._writeProfilerMark("_dataUpdated,info");
+            var changeInfo = this._getDataChangeInfo();
+
+            // Take a snapshot of the current state
+            var updateCommandAnimation = Animations._createUpdateListAnimation(changeInfo.added, changeInfo.deleted, changeInfo.affected);
+
+            // Remove current ICommand elements
+            changeInfo.currentElements.forEach((element) => {
+                if (element.parentElement) {
+                    element.parentElement.removeChild(element);
+                }
+            });
+
+            // Add new ICommand elements in the right order.
+            changeInfo.newElements.forEach((element) => {
+                this._dom.actionArea.appendChild(element);
+            });
+
+            // Ensure that the overflow button is the last element in the main action area
+            this._dom.actionArea.appendChild(this._dom.overflowButton);
+
+            if (this.data.length > 0) {
+                _ElementUtilities.removeClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
+            } else {
+                _ElementUtilities.addClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
+            }
+
+            // Execute the animation.
+            updateCommandAnimation.execute();
+
+            this._processNewData = false;
+        }
+
+        // Cache Measurements
+        if (this._cacheNewMeasurements && _Global.document.body.contains(this._dom.root) && this._dom.actionArea.offsetWidth > 0) { /////////////////////////////this._writeProfilerMark("_measureCommands,info");
+
+            var overflowButtonWidth = _ElementUtilities.getTotalWidth(this._dom.overflowButton),
+                actionAreaContentBoxWidth = _ElementUtilities.getContentWidth(this._dom.actionArea),
+                separatorWidth = 0,
+                standardCommandWidth = 0,
+                contentCommandWidths = {};
+
+            this._primaryCommands.forEach((command) => {
+                // Ensure that the element we are measuring does not have display: none (e.g. it was just added, and it
+                // will be animated in)
+                var originalDisplayStyle = command.element.style.display;
+                command.element.style.display = "";
+
+                if (command.type === _Constants.typeContent) {
+                    // Measure each 'content' command type that we find
+                    this._cachedMeasurements.contentCommandWidths[this._commandUniqueId(command)] = _ElementUtilities.getTotalWidth(command.element);
+                } else if (command.type === _Constants.typeSeparator) {
+                    // Measure the first 'separator' command type we find.
+                    if (!separatorWidth) {
+                        separatorWidth = _ElementUtilities.getTotalWidth(command.element);
+                    }
+                } else {
+                    // Button, toggle, 'flyout' command types have the same width. Measure the first one we find.
+                    if (!standardCommandWidth) {
+                        standardCommandWidth = _ElementUtilities.getTotalWidth(command.element);
+                    }
+                }
+
+                // Restore the original display style
+                command.element.style.display = originalDisplayStyle;
+            });
+
+            this._cachedMeasurements = {
+                contentCommandWidths: contentCommandWidths,
+                separatorWidth: separatorWidth,
+                standardCommandWidth: standardCommandWidth,
+                overflowButtonWidth: overflowButtonWidth,
+                actionAreaContentBoxWidth: actionAreaContentBoxWidth,
+            };
+
+            this._cacheNewMeasurements = false;
+        }
+
+        // position actionarea commands
+        this._writeProfilerMark("_positionCommands,StartTM");
+
+        if (this._measured && !this._disposed) {
+
+            if (this._dom.overflowButton) {
+                // Ensure that the overflow button is the last element in the main action area
+                this._dom.actionArea.appendChild(this._dom.overflowButton);
+            }
+
+            this._primaryCommands.forEach((command) => {
+                command.element.style.display = (command.hidden ? "none" : "");
+            })
+
+            //var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
+
+            var commandsLocation = this._getPrimaryCommandsLocation();
+
+            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
+
+            // Primary commands that will be mirrored in the overflow area should be hidden so
+            // that they are not visible in the main action area.
+            commandsLocation.overflowArea.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            // The secondary commands in the main action area should be hidden since they are always
+            // mirrored as new elements in the overflow area.
+            this._secondaryCommands.forEach((command) => {
+                command.element.style.display = "none";
+            });
+
+            this._setupOverflowArea(commandsLocation.overflowArea);
+        }
+        this._writeProfilerMark("_positionCommands,StopTM");
+        // project overflowarea commands
+        // hideseparators if necessary
+
+        /// jesse
+    }
+
     private _getFocusableElementsInfo(): IFocusableElementsInfo {
         var focusableCommandsInfo: IFocusableElementsInfo = {
             elements: [],
@@ -475,35 +608,12 @@ export class _CommandingSurface {
     }
 
     private _dataUpdated() {
-        this._writeProfilerMark("_dataUpdated,info");
-
-        var changeInfo = this._getDataChangeInfo();
-
-        // Take a snapshot of the current state
-        var updateCommandAnimation = Animations._createUpdateListAnimation(changeInfo.added, changeInfo.deleted, changeInfo.affected);
-
-        // Remove current elements
-        changeInfo.currentElements.forEach((element) => {
-            if (element.parentElement) {
-                element.parentElement.removeChild(element);
-            }
-        });
-
-        // Add new elements in the right order.
-        changeInfo.newElements.forEach((element) => {
-            this._dom.actionArea.appendChild(element);
-        });
-
-        if (this._dom.overflowButton) {
-            // Ensure that the overflow button is the last element in the main action area
-            this._dom.actionArea.appendChild(this._dom.overflowButton);
-        }
+        this._processNewData = true;
+        this._cacheNewMeasurements = true;
 
         this._primaryCommands = [];
         this._secondaryCommands = [];
-
         if (this.data.length > 0) {
-            _ElementUtilities.removeClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
             this.data.forEach((command) => {
                 if (command.section === "secondary") {
                     this._secondaryCommands.push(command);
@@ -511,19 +621,60 @@ export class _CommandingSurface {
                     this._primaryCommands.push(command);
                 }
             });
-
-            if (!this._initializing) {
-                this._measureCommands();
-                this._positionCommands();
-            }
-        } else {
-            this._setupOverflowArea([]);
-            _ElementUtilities.addClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
         }
-
-        // Execute the animation.
-        updateCommandAnimation.execute();
+        this._updateDomImpl();
     }
+
+    //private _dataUpdated() {
+    //    this._writeProfilerMark("_dataUpdated,info");
+
+    //    var changeInfo = this._getDataChangeInfo();
+
+    //    // Take a snapshot of the current state
+    //    var updateCommandAnimation = Animations._createUpdateListAnimation(changeInfo.added, changeInfo.deleted, changeInfo.affected);
+
+    //    // Remove current elements
+    //    changeInfo.currentElements.forEach((element) => {
+    //        if (element.parentElement) {
+    //            element.parentElement.removeChild(element);
+    //        }
+    //    });
+
+    //    // Add new elements in the right order.
+    //    changeInfo.newElements.forEach((element) => {
+    //        this._dom.actionArea.appendChild(element);
+    //    });
+
+    //    if (this._dom.overflowButton) {
+    //        // Ensure that the overflow button is the last element in the main action area
+    //        this._dom.actionArea.appendChild(this._dom.overflowButton);
+    //    }
+
+    //    this._primaryCommands = [];
+    //    this._secondaryCommands = [];
+
+    //    if (this.data.length > 0) {
+    //        _ElementUtilities.removeClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
+    //        this.data.forEach((command) => {
+    //            if (command.section === "secondary") {
+    //                this._secondaryCommands.push(command);
+    //            } else {
+    //                this._primaryCommands.push(command);
+    //            }
+    //        });
+
+    //        if (!this._initializing) {
+    //            this._measureCommands();
+    //            this._positionCommands();
+    //        }
+    //    } else {
+    //        this._setupOverflowArea([]);
+    //        _ElementUtilities.addClass(this._dom.root, _Constants.emptyCommandingSurfaceCssClass);
+    //    }
+
+    //    // Execute the animation.
+    //    updateCommandAnimation.execute();
+    //}
 
     private _getDataChangeInfo(): IDataChangeInfo {
         var i = 0, len = 0;
@@ -575,8 +726,8 @@ export class _CommandingSurface {
             // Batch calls to _dataUpdated
             Scheduler.schedule(() => {
                 if (this._refreshPending && !this._disposed) {
-                    this._dataUpdated();
                     this._refreshPending = false;
+                    this._dataUpdated();
                 }
             }, Scheduler.Priority.high, null, "WinJS.UI._CommandingSurface._refresh");
         }
@@ -700,8 +851,15 @@ export class _CommandingSurface {
 
     private _resizeHandler() {
         if (this._dom.root.offsetWidth > 0) {
-            this._measureCommands(/* skipIfMeasured: */ true);
-            this._positionCommands();
+            if (!this._cachedMeasurements) {
+                this._updateDomImpl();
+            } else {
+                var currentActionAreaWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
+                if (this._cachedMeasurements.actionAreaContentBoxWidth !== currentActionAreaWidth) {
+                    this._cachedMeasurements.actionAreaContentBoxWidth = currentActionAreaWidth;
+                    this._updateDomImpl();
+                }
+            }
         }
     }
 
@@ -734,12 +892,11 @@ export class _CommandingSurface {
         return commands;
     }
 
-    private _getPrimaryCommandsLocation(mainActionWidth: number) {
+    private _getPrimaryCommandsLocation() {
         this._writeProfilerMark("_getCommandsLocation,info");
 
         var mainActionCommands: _Command.ICommand[] = [];
         var overflowCommands: _Command.ICommand[] = [];
-        var spaceLeft = mainActionWidth;
         var overflowButtonSpace = 0;
         var hasSecondaryCommands = this._secondaryCommands.length > 0;
 
@@ -749,13 +906,13 @@ export class _CommandingSurface {
         });
 
         var maxPriority = Number.MAX_VALUE;
-        var availableWidth = mainActionWidth;
+        var availableWidth = this._cachedMeasurements.actionAreaContentBoxWidth;
 
         for (var i = 0, len = sortedCommandsInfo.length; i < len; i++) {
             availableWidth -= sortedCommandsInfo[i].width;
 
             // The overflow button needs space if there are secondary commands, or we are not evaluating the last command.
-            overflowButtonSpace = (hasSecondaryCommands || (i < len - 1) ? this._overflowButtonWidth : 0)
+            overflowButtonSpace = (hasSecondaryCommands || (i < len - 1) ? this._cachedMeasurements.overflowButtonWidth : 0)
 
             if (availableWidth - overflowButtonSpace < 0) {
                 maxPriority = sortedCommandsInfo[i].priority - 1;
@@ -779,106 +936,106 @@ export class _CommandingSurface {
 
     private _getCommandWidth(command: _Command.ICommand): number {
         if (command.type === _Constants.typeContent) {
-            return this._customContentCommandsWidth[this._commandUniqueId(command)];
+            return this._cachedMeasurements.contentCommandWidths[this._commandUniqueId(command)];
         } else if (command.type === _Constants.typeSeparator) {
-            return this._separatorWidth;
+            return this._cachedMeasurements.separatorWidth;
         } else {
-            return this._standardCommandWidth;
+            return this._cachedMeasurements.standardCommandWidth;
         }
     }
 
-    private _measureCommands(skipIfMeasured: boolean = false) {
-        this._writeProfilerMark("_measureCommands,info");
+    //private _measureCommands(skipIfMeasured: boolean = false) {
+    //    this._writeProfilerMark("_measureCommands,info");
 
-        if (this._disposed || !_Global.document.body.contains(this._dom.root) || this._dom.root.offsetWidth === 0) {
-            return;
-        }
+    //    if (this._disposed || !_Global.document.body.contains(this._dom.root) || this._dom.root.offsetWidth === 0) {
+    //        return;
+    //    }
 
-        if (!skipIfMeasured) {
-            this._customContentCommandsWidth = {};
-            this._separatorWidth = 0;
-            this._standardCommandWidth = 0;
-        }
-        this._primaryCommands.forEach((command) => {
-            if (!command.element.parentElement) {
-                this._dom.actionArea.appendChild(command.element);
-            }
+    //    if (!skipIfMeasured) {
+    //        this._cachedMeasurements.customContentCommandsWidth = {};
+    //        this._cachedMeasurements.separatorWidth = 0;
+    //        this._cachedMeasurements.standardCommandWidth = 0;
+    //    }
+    //    this._primaryCommands.forEach((command) => {
+    //        if (!command.element.parentElement) {
+    //            this._dom.actionArea.appendChild(command.element);
+    //        }
 
-            // Ensure that the element we are measuring does not have display: none (e.g. it was just added, and it
-            // will be animated in)
-            var originalDisplayStyle = command.element.style.display;
-            command.element.style.display = "";
+    //        // Ensure that the element we are measuring does not have display: none (e.g. it was just added, and it
+    //        // will be animated in)
+    //        var originalDisplayStyle = command.element.style.display;
+    //        command.element.style.display = "";
 
-            if (command.type === _Constants.typeContent && !this._customContentCommandsWidth[this._commandUniqueId(command)]) {
-                this._customContentCommandsWidth[this._commandUniqueId(command)] = _ElementUtilities.getTotalWidth(command.element);
-            } else if (command.type === _Constants.typeSeparator) {
-                if (!this._separatorWidth) {
-                    this._separatorWidth = _ElementUtilities.getTotalWidth(command.element);
-                }
-            } else {
-                // Button, toggle, flyout command types have the same width
-                if (!this._standardCommandWidth) {
-                    this._standardCommandWidth = _ElementUtilities.getTotalWidth(command.element);
-                }
-            }
+    //        if (command.type === _Constants.typeContent && !this._cachedMeasurements.customContentCommandsWidth[this._commandUniqueId(command)]) {
+    //            this._cachedMeasurements.customContentCommandsWidth[this._commandUniqueId(command)] = _ElementUtilities.getTotalWidth(command.element);
+    //        } else if (command.type === _Constants.typeSeparator) {
+    //            if (!this._cachedMeasurements.separatorWidth) {
+    //                this._cachedMeasurements.separatorWidth = _ElementUtilities.getTotalWidth(command.element);
+    //            }
+    //        } else {
+    //            // Button, toggle, flyout command types have the same width
+    //            if (!this._cachedMeasurements.standardCommandWidth) {
+    //                this._cachedMeasurements.standardCommandWidth = _ElementUtilities.getTotalWidth(command.element);
+    //            }
+    //        }
 
-            // Restore the original display style
-            command.element.style.display = originalDisplayStyle;
-        });
+    //        // Restore the original display style
+    //        command.element.style.display = originalDisplayStyle;
+    //    });
 
-        if (this._dom.overflowButton && !this._overflowButtonWidth) {
-            this._overflowButtonWidth = _ElementUtilities.getTotalWidth(this._dom.overflowButton);
-        }
+    //    if (this._dom.overflowButton && !this._cachedMeasurements.overflowButtonWidth) {
+    //        this._cachedMeasurements.overflowButtonWidth = _ElementUtilities.getTotalWidth(this._dom.overflowButton);
+    //    }
 
-        this._measured = true;
-    }
+    //    this._measured = true;
+    //}
 
-    private _positionCommands() {
-        this._writeProfilerMark("_positionCommands,StartTM");
+    //private _positionCommands() {
+    //    this._writeProfilerMark("_positionCommands,StartTM");
 
-        if (this._measured && !this._disposed) {
+    //    if (this._measured && !this._disposed) {
 
-            if (this._dom.overflowButton) {
-                // Ensure that the overflow button is the last element in the main action area
-                this._dom.actionArea.appendChild(this._dom.overflowButton);
-            }
+    //        if (this._dom.overflowButton) {
+    //            // Ensure that the overflow button is the last element in the main action area
+    //            this._dom.actionArea.appendChild(this._dom.overflowButton);
+    //        }
 
-            this._primaryCommands.forEach((command) => {
-                command.element.style.display = (command.hidden ? "none" : "");
-            })
+    //        this._primaryCommands.forEach((command) => {
+    //            command.element.style.display = (command.hidden ? "none" : "");
+    //        })
 
-            var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.root);
+    //        //var mainActionWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
 
-            var commandsLocation = this._getPrimaryCommandsLocation(mainActionWidth);
+    //        var commandsLocation = this._getPrimaryCommandsLocation();
 
-            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
+    //        this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
 
-            // Primary commands that will be mirrored in the overflow area should be hidden so
-            // that they are not visible in the main action area.
-            commandsLocation.overflowArea.forEach((command) => {
-                command.element.style.display = "none";
-            });
+    //        // Primary commands that will be mirrored in the overflow area should be hidden so
+    //        // that they are not visible in the main action area.
+    //        commandsLocation.overflowArea.forEach((command) => {
+    //            command.element.style.display = "none";
+    //        });
 
-            // The secondary commands in the main action area should be hidden since they are always
-            // mirrored as new elements in the overflow area.
-            this._secondaryCommands.forEach((command) => {
-                command.element.style.display = "none";
-            });
+    //        // The secondary commands in the main action area should be hidden since they are always
+    //        // mirrored as new elements in the overflow area.
+    //        this._secondaryCommands.forEach((command) => {
+    //            command.element.style.display = "none";
+    //        });
 
-            this._setupOverflowArea(commandsLocation.overflowArea);
-        }
-        this._writeProfilerMark("_positionCommands,StopTM");
-    }
+    //        this._setupOverflowArea(commandsLocation.overflowArea);
+    //    }
+    //    this._writeProfilerMark("_positionCommands,StopTM");
+    //}
 
-    private _getMenuCommand(command: _Command.ICommand): _MenuCommand.MenuCommand {
+    private _projectAsMenuCommand(originalCommand: _Command.ICommand): _MenuCommand.MenuCommand {
         var menuCommand = new _CommandingSurfaceMenuCommand._MenuCommand(null, {
-            label: command.label,
-            type: (command.type === _Constants.typeContent ? _Constants.typeFlyout : command.type) || _Constants.typeButton,
-            disabled: command.disabled,
-            flyout: command.flyout,
+            label: originalCommand.label,
+            type: (originalCommand.type === _Constants.typeContent ? _Constants.typeFlyout : originalCommand.type) || _Constants.typeButton,
+            disabled: originalCommand.disabled,
+            flyout: originalCommand.flyout,
             beforeInvoke: () => {
                 // Save the command that was selected
-                this._chosenCommand = <_Command.ICommand>(menuCommand["_originalCommandingSurfaceCommand"]);
+                this._chosenCommand = <_Command.ICommand>(menuCommand["_originalICommand"]);
 
                 // If this WinJS.UI.MenuCommand has type: toggle, we should also toggle the value of the original WinJS.UI.Command
                 if (this._chosenCommand.type === _Constants.typeToggle) {
@@ -887,23 +1044,23 @@ export class _CommandingSurface {
             }
         });
 
-        if (command.selected) {
+        if (originalCommand.selected) {
             menuCommand.selected = true;
         }
 
-        if (command.extraClass) {
-            menuCommand.extraClass = command.extraClass;
+        if (originalCommand.extraClass) {
+            menuCommand.extraClass = originalCommand.extraClass;
         }
 
-        if (command.type === _Constants.typeContent) {
+        if (originalCommand.type === _Constants.typeContent) {
             if (!menuCommand.label) {
                 menuCommand.label = _Constants.contentMenuCommandDefaultLabel;
             }
             menuCommand.flyout = this._contentFlyout;
         } else {
-            menuCommand.onclick = command.onclick;
+            menuCommand.onclick = originalCommand.onclick;
         }
-        menuCommand["_originalCommandingSurfaceCommand"] = command;
+        menuCommand["_originalICommand"] = originalCommand;
         return menuCommand;
     }
 
@@ -937,7 +1094,7 @@ export class _CommandingSurface {
         _ElementUtilities.empty(this._dom.overflowArea);
         var hasToggleCommands = false,
             hasFlyoutCommands = false,
-            menuCommands: _MenuCommand.MenuCommand[] = [];
+            menuCommandProjections: _MenuCommand.MenuCommand[] = [];
 
         // Add primary commands that have overflowed. 
         additionalCommands.forEach((command) => {
@@ -949,7 +1106,7 @@ export class _CommandingSurface {
                 hasFlyoutCommands = true;
             }
 
-            menuCommands.push(this._getMenuCommand(command));
+            menuCommandProjections.push(this._projectAsMenuCommand(command));
         });
 
         // Add separator between primary and secondary command if applicable 
@@ -959,7 +1116,7 @@ export class _CommandingSurface {
                 type: _Constants.typeSeparator
             });
 
-            menuCommands.push(separator);
+            menuCommandProjections.push(separator);
         }
 
         // Add secondary commands 
@@ -973,12 +1130,12 @@ export class _CommandingSurface {
                     hasFlyoutCommands = true;
                 }
 
-                menuCommands.push(this._getMenuCommand(command));
+                menuCommandProjections.push(this._projectAsMenuCommand(command));
             }
         });
 
-        this._hideSeparatorsIfNeeded(menuCommands);
-        menuCommands.forEach((command) => {
+        this._hideSeparatorsIfNeeded(menuCommandProjections);
+        menuCommandProjections.forEach((command) => {
             this._dom.overflowArea.appendChild(command.element);
         })
 
