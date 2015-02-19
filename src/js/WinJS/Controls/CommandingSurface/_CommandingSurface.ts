@@ -495,9 +495,7 @@ export class _CommandingSurface {
 
         var canLayout: boolean = (!!this._cachedMeasurements || this._measure());
 
-        // layout actionarea commands
-        // this._writeProfilerMark("_positionCommands,StartTM");
-        if (this._needLayout && canLayout) {
+        if (this._needLayout && canLayout) { ////////////// this._writeProfilerMark("_positionCommands,StartTM");
 
             this._primaryCommands.forEach((command) => {
                 command.element.style.display = (command.hidden ? "none" : "");
@@ -570,7 +568,7 @@ export class _CommandingSurface {
                 actionAreaContentBoxWidth: actionAreaContentBoxWidth,
             };
             return true;
-        } 
+        }
         return false;
     }
 
@@ -842,16 +840,10 @@ export class _CommandingSurface {
 
     private _resizeHandler() {
         if (this._dom.root.offsetWidth > 0) {
-            if (!this._cachedMeasurements) {
-                this._needLayout = true
+            var currentActionAreaWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
+            if (this._cachedMeasurements.actionAreaContentBoxWidth !== currentActionAreaWidth) {
+                this._needLayout = true;
                 this._updateDomImpl();
-            } else {
-                var currentActionAreaWidth = _ElementUtilities.getContentWidth(this._dom.actionArea);
-                if (this._cachedMeasurements.actionAreaContentBoxWidth !== currentActionAreaWidth) {
-                    this._cachedMeasurements.actionAreaContentBoxWidth = currentActionAreaWidth;
-                    this._needLayout = true;
-                    this._updateDomImpl();
-                }
             }
         }
     }
