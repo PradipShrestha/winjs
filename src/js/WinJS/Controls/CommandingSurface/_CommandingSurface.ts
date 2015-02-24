@@ -107,6 +107,30 @@ function diffElements(lhs: Array<HTMLElement>, rhs: Array<HTMLElement>): Array<H
     // Returns a new Array containing the subset of elements in lhs that are not also in rhs.
     return lhs.filter((commandElement) => { return rhs.indexOf(commandElement) < 0 })
 }
+function _hideSeparatorsIfNeeded(commands: ICommandWithType[]): void {
+        var prevType = _Constants.typeSeparator;
+        var command: ICommandWithType;
+
+// Hide all leading or consecutive separators
+var commandsLength = commands.length;
+commands.forEach((command) => {
+    if (command.type === _Constants.typeSeparator &&
+        prevType === _Constants.typeSeparator) {
+        command.element.style.display = "none";
+    }
+    prevType = command.type;
+});
+
+// Hide trailing separators
+for (var i = commandsLength - 1; i >= 0; i--) {
+    command = commands[i];
+    if (command.type === _Constants.typeSeparator) {
+        command.element.style.display = "none";
+    } else {
+        break;
+    }
+        }
+    }
 
 /// <field>
 /// <summary locid="WinJS.UI._CommandingSurface">
@@ -820,7 +844,7 @@ export class _CommandingSurface {
 
         var commandsLocation = this._getPrimaryCommandsLocation(actionAreaWidth);
 
-        this._hideSeparatorsIfNeeded(commandsLocation.actionArea);
+        _hideSeparatorsIfNeeded(commandsLocation.actionArea);
 
         // Primary commands that will be mirrored in the overflowarea should be hidden so
         // that they are not visible in the actionarea.
@@ -947,38 +971,13 @@ export class _CommandingSurface {
             }
         });
 
-        this._hideSeparatorsIfNeeded(menuCommands);
+        _hideSeparatorsIfNeeded(menuCommands);
         menuCommands.forEach((command) => {
             this._dom.overflowArea.appendChild(command.element);
         })
 
         _ElementUtilities[hasToggleCommands ? "addClass" : "removeClass"](this._dom.overflowArea, _Constants.menuContainsToggleCommandClass);
         _ElementUtilities[hasFlyoutCommands ? "addClass" : "removeClass"](this._dom.overflowArea, _Constants.menuContainsFlyoutCommandClass);
-    }
-
-    private _hideSeparatorsIfNeeded(commands: ICommandWithType[]): void {
-        var prevType = _Constants.typeSeparator;
-        var command: ICommandWithType;
-
-        // Hide all leading or consecutive separators
-        var commandsLength = commands.length;
-        commands.forEach((command) => {
-            if (command.type === _Constants.typeSeparator &&
-                prevType === _Constants.typeSeparator) {
-                command.element.style.display = "none";
-            }
-            prevType = command.type;
-        });
-
-        // Hide trailing separators
-        for (var i = commandsLength - 1; i >= 0; i--) {
-            command = commands[i];
-            if (command.type === _Constants.typeSeparator) {
-                command.element.style.display = "none";
-            } else {
-                break;
-            }
-        }
     }
 }
 
