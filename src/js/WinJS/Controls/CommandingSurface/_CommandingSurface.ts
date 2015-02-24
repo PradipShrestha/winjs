@@ -984,3 +984,10 @@ export class _CommandingSurface {
 
 // addEventListener, removeEventListener, dispatchEvent
 _Base.Class.mix(_CommandingSurface, _Control.DOMEventMixin);
+
+class _ActionArea {
+
+    constructor(element?: HTMLElement, options: any = {}) { }
+
+
+}
