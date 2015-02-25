@@ -366,7 +366,7 @@ export class _CommandingSurface {
             this._processNewData = false;
         }
 
-        // Ensure that the overflow button is always the last element in the main action area
+        // Ensure that the overflow button is always the last element in the actionarea
         this._dom.actionArea.appendChild(this._dom.overflowButton);
 
         var canLayout: boolean = (!!this._cachedMeasurements || this._measure());
@@ -379,15 +379,15 @@ export class _CommandingSurface {
 
             var commandsLocation = this._getPrimaryCommandsLocation();
 
-            this._hideSeparatorsIfNeeded(commandsLocation.mainArea);
+            this._hideSeparatorsIfNeeded(commandsLocation.actionArea);
 
             // Primary commands that will be mirrored in the overflow area should be hidden so
-            // that they are not visible in the main action area.
+            // that they are not visible in the actionarea.
             commandsLocation.overflowArea.forEach((command) => {
                 command.element.style.display = "none";
             });
 
-            // The secondary commands in the main action area should be hidden since they are always
+            // The secondary commands in the actionarea should be hidden since they are always
             // mirrored as new elements in the overflow area.
             this._secondaryCommands.forEach((command) => {
                 command.element.style.display = "none";
@@ -579,14 +579,14 @@ export class _CommandingSurface {
         return focusable;
     }
 
-    private _isMainActionCommand(element: HTMLElement) {
-        // Returns true if the element is a command in the main action area, false otherwise
+    private _isCommandInActionArea(element: HTMLElement) {
+        // Returns true if the element is a command in the actionarea, false otherwise
         return element && element["winControl"] && element.parentElement === this._dom.actionArea;
     }
 
     private _getLastElementFocus(element: HTMLElement) {
-        if (this._isMainActionCommand(element)) {
-            // Only commands in the main action area support lastElementFocus
+        if (this._isCommandInActionArea(element)) {
+            // Only commands in the actionarea support lastElementFocus
             return element["winControl"].lastElementFocus;
         } else {
             return element;
@@ -594,8 +594,8 @@ export class _CommandingSurface {
     }
 
     private _getFirstElementFocus(element: HTMLElement) {
-        if (this._isMainActionCommand(element)) {
-            // Only commands in the main action area support firstElementFocus
+        if (this._isCommandInActionArea(element)) {
+            // Only commands in the actionarea support firstElementFocus
             return element["winControl"].firstElementFocus;
         } else {
             return element;
@@ -705,8 +705,8 @@ export class _CommandingSurface {
     private _getPrimaryCommandsLocation() {
         this._writeProfilerMark("_getCommandsLocation,info");
 
-        var mainActionCommands: _Command.ICommand[] = [];
-        var overflowCommands: _Command.ICommand[] = [];
+        var actionAreaCommands: _Command.ICommand[] = [];
+        var overflowAreaCommands: _Command.ICommand[] = [];
         var overflowButtonSpace = 0;
         var hasSecondaryCommands = this._secondaryCommands.length > 0;
 
@@ -732,15 +732,15 @@ export class _CommandingSurface {
 
         commandsInfo.forEach((commandInfo) => {
             if (commandInfo.priority <= maxPriority) {
-                mainActionCommands.push(commandInfo.command);
+                actionAreaCommands.push(commandInfo.command);
             } else {
-                overflowCommands.push(commandInfo.command);
+                overflowAreaCommands.push(commandInfo.command);
             }
         });
 
         return {
-            mainArea: mainActionCommands,
-            overflowArea: overflowCommands
+            actionArea: actionAreaCommands,
+            overflowArea: overflowAreaCommands
         }
     }
 
